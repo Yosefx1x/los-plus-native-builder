@@ -1,0 +1,82 @@
+name: Build Real LOS PLUS IPA
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate App Icons (Opaque RGB PNGs) & Assets
+        run: |
+          mkdir -p Assets.xcassets/AppIcon.appiconset
+          python3 -c '
+          import zlib, struct
+          def make_png(w, h):
+              raw = bytearray()
+              for y in range(h):
+                  raw.append(0)
+                  for x in range(w):
+                      # Dark background with neon magenta/purple center glow & border
+                      bx = min(x, w - 1 - x)
+                      by = min(y, h - 1 - y)
+                      border = min(bx, by)
+                      if border < max(4, w // 25):
+                          r, g, b = 255, 40, 184
+                      elif (w*0.28 < x < w*0.72) and (h*0.28 < y < h*0.72):
+                          r, g, b = 139, 66, 255
+                      else:
+                          r, g, b = 8, 8, 12
+                      raw.extend((r, g, b))
+              def chunk(tag, data):
+                  return struct.pack("!I", len(data)) + tag + data + struct.pack("!I", zlib.crc32(tag + data) & 0xffffffff)
+              return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
+          for size, name in [(120, "Icon-120.png"), (180, "Icon-180.png"), (1024, "Icon-1024.png")]:
+              open(f"Assets.xcassets/AppIcon.appiconset/{name}", "wb").write(make_png(size, size))
+          open("AppIcon60x60@2x.png", "wb").write(make_png(120, 120))
+          open("AppIcon60x60@3x.png", "wb").write(make_png(180, 180))
+          '
+
+      - name: Install XcodeGen & Generate Project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build arm64 iOS App via Xcode
+        run: |
+          xcodebuild -project LOSPLUS.xcodeproj \
+            -scheme LOSPLUS \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            ARCHS="arm64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            clean build
+
+      - name: Package & Ad-Hoc Sign Valid IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/LOSPLUS.app Payload/LOSPLUS.app
+          cp AppIcon60x60@2x.png Payload/LOSPLUS.app/
+          cp AppIcon60x60@3x.png Payload/LOSPLUS.app/
+          chmod 755 Payload/LOSPLUS.app/LOSPLUS
+          # Ad-hoc sign the binary so LC_CODE_SIGNATURE is valid for all external signers (ESign/Scarlet/zsign)
+          codesign --force --sign - --timestamp=none Payload/LOSPLUS.app
+          ditto -c -k --sequesterRsrc --keepParent Payload LOS-PLUS.ipa
+
+      - name: Publish Direct IPA to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create v1.0.0 LOS-PLUS.ipa --title "LOS PLUS v1.0.0" --notes "Official Compiled iOS Store App" --clobber
