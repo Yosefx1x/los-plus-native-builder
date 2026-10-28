@@ -193,12 +193,12 @@ struct ContentView: View {
 
                 HStack(spacing: 6) {
                     Text("v\(app.version ?? "1.0")")
-                        .font(.system(size: 10, weight: .mono))
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
                         .foregroundColor(.gray)
                     Text("•")
                         .foregroundColor(.gray)
                     Text(app.size ?? "50 MB")
-                        .font(.system(size: 10, weight: .mono))
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
                         .foregroundColor(.gray)
                 }
             }
